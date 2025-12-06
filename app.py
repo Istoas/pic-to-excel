@@ -30,27 +30,45 @@ if 'current_image' not in st.session_state:
 # --- DESIGN PAGE ---
 st.set_page_config(page_title="Pic to Excel", layout="wide", initial_sidebar_state="expanded")
 
-# CSS (NETTOYÉ POUR LE DARK MODE)
 st.markdown("""
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
     html, body, [class*="css"]  { font-family: 'Inter', sans-serif; }
-    
-    /* Titres */
     h1 { text-align: center; font-weight: 700; padding-bottom: 20px; }
     .subtitle { text-align: center; opacity: 0.7; margin-top: -20px; margin-bottom: 40px; }
-    
-    /* Boutons */
     .stButton > button { width: 100%; border-radius: 6px; height: 3em; font-weight: 600; }
-    
-    /* Nettoyage */
-    #MainMenu {visibility: hidden;} 
-    footer {visibility: hidden;}
+    #MainMenu {visibility: hidden;} footer {visibility: hidden;}
     [data-testid="stFileUploader"] { border: 1px dashed opacity: 0.5; border-radius: 6px; }
 </style>
 """, unsafe_allow_html=True)
 
-# --- FONCTIONS ---
+# --- FONCTIONS UTILITAIRES ---
+
+def clean_dataframe_columns(df):
+    """Nettoie les colonnes AVANT l'affichage pour éviter le crash Streamlit."""
+    new_cols = []
+    seen_cols = {}
+    
+    for col in df.columns:
+        # Convertir en string et nettoyer
+        col_str = str(col).strip()
+        
+        # Si vide ou "Unnamed", on donne un nom générique
+        if not col_str or "Unnamed" in col_str:
+            col_str = "Colonne"
+            
+        # Gestion des doublons (Ex: Prix, Prix_2, Prix_3)
+        if col_str in seen_cols:
+            seen_cols[col_str] += 1
+            col_str = f"{col_str}_{seen_cols[col_str]}"
+        else:
+            seen_cols[col_str] = 1
+            
+        new_cols.append(col_str)
+        
+    df.columns = new_cols
+    return df
+
 def load_image_from_upload(uploaded_file):
     if uploaded_file.type == "application/pdf":
         doc = fitz.open(stream=uploaded_file.read(), filetype="pdf")
@@ -67,10 +85,7 @@ def create_styled_excel(df):
     ws = wb.active
     ws.title = "Données"
     
-    # Nettoyage Colonnes
-    new_columns = [str(col).strip() if "Unnamed" not in str(col) and str(col).strip() != "" else f"Col_{i+1}" for i, col in enumerate(df.columns)]
-    df.columns = new_columns
-
+    # Écriture
     for r in dataframe_to_rows(df, index=False, header=True):
         ws.append(r)
 
@@ -103,9 +118,9 @@ with st.sidebar:
     st.divider()
     try:
         model = genai.GenerativeModel(MODEL_NAME)
-        st.caption(f"Status : Connecté ({MODEL_NAME})")
+        st.caption(f"Status : Connecté")
     except:
-        st.error("Erreur API")
+        st.error("Erreur API : Vérifiez les secrets.")
         
     if st.button("Réinitialiser l'application"):
         st.session_state.df_result = None
@@ -135,28 +150,26 @@ with col_gauche:
             if st.button("Lancer l'extraction", type="primary", use_container_width=True):
                 with st.spinner("Analyse en cours..."):
                     
-                    # PROMPT UNIVERSEL (Gère les Tableaux ET les Images normales)
                     prompt = """
                     Tu es un expert Data & Vision.
                     TACHE : Transforme cette image en données structurées CSV (séparateur point-virgule).
                     
-                    CAS 1 : C'est un document (Facture, Tableau, Liste).
-                    -> Extrais fidèlement les données, chiffres et colonnes.
-                    
-                    CAS 2 : C'est une photo ou une image sans texte (ex: Paysage, Objet, Scène).
-                    -> Crée un tableau décrivant ce que tu vois.
-                    -> Colonnes : Élément; Description; Position; Couleur
-                    
                     RÈGLES :
                     - Uniquement du CSV brut.
                     - Pas de texte avant/après.
+                    - Si une case est vide, laisse ;;
                     """
                     
                     response = model.generate_content([prompt, st.session_state.current_image])
                     raw_csv = response.text.replace("```csv", "").replace("```", "").strip()
                     
-                    st.session_state.df_result = pd.read_csv(io.StringIO(raw_csv), sep=";", engine="python", on_bad_lines='skip')
-                    st.session_state.chat_history.append({"role": "assistant", "content": "Analyse terminée. Si c'est une image, j'ai listé les éléments détectés."})
+                    # Lecture
+                    df_temp = pd.read_csv(io.StringIO(raw_csv), sep=";", engine="python", on_bad_lines='skip')
+                    
+                    # NETTOYAGE IMMÉDIAT (Le Fix)
+                    st.session_state.df_result = clean_dataframe_columns(df_temp)
+                    
+                    st.session_state.chat_history.append({"role": "assistant", "content": "Analyse terminée."})
                     st.rerun()
                     
         except Exception as e:
@@ -167,25 +180,36 @@ with col_droite:
     if st.session_state.df_result is not None:
         st.markdown("##### 2. Données Extraites")
         
-        # TABLEAU
-        edited_df = st.data_editor(st.session_state.df_result, num_rows="dynamic", use_container_width=True, height=400, key="editor")
-        
-        # EXPORT
-        excel_data = create_styled_excel(edited_df)
-        c1, c2 = st.columns(2)
-        c1.download_button("Télécharger Excel (.xlsx)", excel_data, "Export.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", type="primary")
-        c2.download_button("Télécharger CSV (.csv)", edited_df.to_csv(index=False, sep=";").encode('utf-8'), "data.csv", "text/csv")
+        # TABLEAU (C'est ici que ça plantait)
+        try:
+            edited_df = st.data_editor(
+                st.session_state.df_result, 
+                num_rows="dynamic", 
+                use_container_width=True, 
+                height=400, 
+                key="editor"
+            )
+            
+            # EXPORT
+            excel_data = create_styled_excel(edited_df)
+            c1, c2 = st.columns(2)
+            c1.download_button("Télécharger Excel (.xlsx)", excel_data, "Export.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", type="primary")
+            c2.download_button("Télécharger CSV (.csv)", edited_df.to_csv(index=False, sep=";").encode('utf-8'), "data.csv", "text/csv")
+            
+        except Exception as e:
+            st.error(f"Erreur d'affichage du tableau : {e}")
+            st.warning("Essayez de réinitialiser ou de recharger l'image.")
         
         st.divider()
         st.markdown("##### Assistant IA")
         
-        # HISTORIQUE CHAT (Corrigé pour Dark Mode)
+        # HISTORIQUE CHAT
         for msg in st.session_state.chat_history:
             with st.chat_message(msg["role"]):
                 st.write(msg["content"])
         
         # INPUT
-        if user_input := st.chat_input("Ex: Ajoute une colonne 'Total', traduis en anglais..."):
+        if user_input := st.chat_input("Ex: Ajoute une colonne 'Total'..."):
             st.session_state.chat_history.append({"role": "user", "content": user_input})
             with st.chat_message("user"):
                 st.write(user_input)
@@ -193,24 +217,25 @@ with col_droite:
             csv_current = edited_df.to_csv(index=False, sep=";")
             
             prompt_modif = f"""
-            Tu es un assistant Data.
-            Tableau CSV actuel :
+            CSV actuel :
             {csv_current}
             
-            Demande utilisateur : "{user_input}"
+            Modif : "{user_input}"
             
-            TACHE : Renvoie le NOUVEAU CSV complet modifié.
-            RÈGLES : Uniquement le CSV (point-virgule). Pas de texte avant/après.
+            Renvoie le NOUVEAU CSV complet. Rien d'autre.
             """
             
             with st.spinner("Traitement..."):
                 try:
                     response = model.generate_content([prompt_modif, st.session_state.current_image])
                     new_csv = response.text.replace("```csv", "").replace("```", "").strip()
-                    st.session_state.df_result = pd.read_csv(io.StringIO(new_csv), sep=";", engine="python", on_bad_lines='skip')
                     
-                    bot_reply = "C'est modifié."
-                    st.session_state.chat_history.append({"role": "assistant", "content": bot_reply})
+                    df_temp = pd.read_csv(io.StringIO(new_csv), sep=";", engine="python", on_bad_lines='skip')
+                    
+                    # NETTOYAGE AUSSI APRÈS MODIF
+                    st.session_state.df_result = clean_dataframe_columns(df_temp)
+                    
+                    st.session_state.chat_history.append({"role": "assistant", "content": "C'est modifié."})
                     st.rerun()
                     
                 except Exception as e:
