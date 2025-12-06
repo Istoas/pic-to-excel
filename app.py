@@ -30,22 +30,27 @@ if 'current_image' not in st.session_state:
 # --- DESIGN PAGE ---
 st.set_page_config(page_title="Pic to Excel", layout="wide", initial_sidebar_state="expanded")
 
+# CSS (NETTOYÉ POUR LE DARK MODE)
 st.markdown("""
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
     html, body, [class*="css"]  { font-family: 'Inter', sans-serif; }
-    h1 { text-align: center; font-weight: 700; color: #0F172A; padding-bottom: 20px; }
-    .subtitle { text-align: center; font-size: 1.1rem; color: #64748B; margin-top: -20px; margin-bottom: 40px; }
-    .stButton > button { width: 100%; background-color: #0F172A; color: white; border-radius: 6px; height: 3em; font-weight: 600; border: none; }
-    .stButton > button:hover { background-color: #334155; color: white; }
-    #MainMenu {visibility: hidden;} footer {visibility: hidden;}
-    [data-testid="stFileUploader"] { background-color: #F8FAFC; border: 1px dashed #CBD5E1; border-radius: 6px; }
-    /* Chat propre */
-    .stChatMessage { background-color: #F8FAFC; border: 1px solid #E2E8F0; border-radius: 6px; }
+    
+    /* Titres */
+    h1 { text-align: center; font-weight: 700; padding-bottom: 20px; }
+    .subtitle { text-align: center; opacity: 0.7; margin-top: -20px; margin-bottom: 40px; }
+    
+    /* Boutons */
+    .stButton > button { width: 100%; border-radius: 6px; height: 3em; font-weight: 600; }
+    
+    /* Nettoyage */
+    #MainMenu {visibility: hidden;} 
+    footer {visibility: hidden;}
+    [data-testid="stFileUploader"] { border: 1px dashed opacity: 0.5; border-radius: 6px; }
 </style>
 """, unsafe_allow_html=True)
 
-# --- FONCTIONS UTILITAIRES ---
+# --- FONCTIONS ---
 def load_image_from_upload(uploaded_file):
     if uploaded_file.type == "application/pdf":
         doc = fitz.open(stream=uploaded_file.read(), filetype="pdf")
@@ -62,7 +67,8 @@ def create_styled_excel(df):
     ws = wb.active
     ws.title = "Données"
     
-    new_columns = [str(col).strip() if "Unnamed" not in str(col) and str(col).strip() != "" else f"Colonne {i+1}" for i, col in enumerate(df.columns)]
+    # Nettoyage Colonnes
+    new_columns = [str(col).strip() if "Unnamed" not in str(col) and str(col).strip() != "" else f"Col_{i+1}" for i, col in enumerate(df.columns)]
     df.columns = new_columns
 
     for r in dataframe_to_rows(df, index=False, header=True):
@@ -109,7 +115,7 @@ with st.sidebar:
 
 # --- HEADER ---
 st.title("Pic to Excel")
-st.markdown('<p class="subtitle">Extraction de données et conversion de documents</p>', unsafe_allow_html=True)
+st.markdown('<p class="subtitle">Convertisseur universel (Documents & Images)</p>', unsafe_allow_html=True)
 
 col_gauche, col_droite = st.columns([1, 2], gap="large")
 
@@ -128,15 +134,29 @@ with col_gauche:
             st.write("") 
             if st.button("Lancer l'extraction", type="primary", use_container_width=True):
                 with st.spinner("Analyse en cours..."):
+                    
+                    # PROMPT UNIVERSEL (Gère les Tableaux ET les Images normales)
                     prompt = """
-                    Tu es un expert Data. Extrais ce tableau en CSV (séparateur point-virgule).
-                    Règles : Précision 100%, pas de texte inutile, respecte la structure.
+                    Tu es un expert Data & Vision.
+                    TACHE : Transforme cette image en données structurées CSV (séparateur point-virgule).
+                    
+                    CAS 1 : C'est un document (Facture, Tableau, Liste).
+                    -> Extrais fidèlement les données, chiffres et colonnes.
+                    
+                    CAS 2 : C'est une photo ou une image sans texte (ex: Paysage, Objet, Scène).
+                    -> Crée un tableau décrivant ce que tu vois.
+                    -> Colonnes : Élément; Description; Position; Couleur
+                    
+                    RÈGLES :
+                    - Uniquement du CSV brut.
+                    - Pas de texte avant/après.
                     """
+                    
                     response = model.generate_content([prompt, st.session_state.current_image])
                     raw_csv = response.text.replace("```csv", "").replace("```", "").strip()
                     
                     st.session_state.df_result = pd.read_csv(io.StringIO(raw_csv), sep=";", engine="python", on_bad_lines='skip')
-                    st.session_state.chat_history.append({"role": "assistant", "content": "Tableau extrait. Vous pouvez demander des modifications ci-dessous."})
+                    st.session_state.chat_history.append({"role": "assistant", "content": "Analyse terminée. Si c'est une image, j'ai listé les éléments détectés."})
                     st.rerun()
                     
         except Exception as e:
@@ -157,15 +177,15 @@ with col_droite:
         c2.download_button("Télécharger CSV (.csv)", edited_df.to_csv(index=False, sep=";").encode('utf-8'), "data.csv", "text/csv")
         
         st.divider()
-        st.markdown("##### Assistant de modification")
+        st.markdown("##### Assistant IA")
         
-        # HISTORIQUE CHAT
+        # HISTORIQUE CHAT (Corrigé pour Dark Mode)
         for msg in st.session_state.chat_history:
             with st.chat_message(msg["role"]):
                 st.write(msg["content"])
         
         # INPUT
-        if user_input := st.chat_input("Ex: Supprimer la colonne TVA, mettre les noms en majuscule..."):
+        if user_input := st.chat_input("Ex: Ajoute une colonne 'Total', traduis en anglais..."):
             st.session_state.chat_history.append({"role": "user", "content": user_input})
             with st.chat_message("user"):
                 st.write(user_input)
@@ -179,7 +199,7 @@ with col_droite:
             
             Demande utilisateur : "{user_input}"
             
-            TACHE : Renvoie le NOUVEAU CSV modifié.
+            TACHE : Renvoie le NOUVEAU CSV complet modifié.
             RÈGLES : Uniquement le CSV (point-virgule). Pas de texte avant/après.
             """
             
@@ -189,7 +209,7 @@ with col_droite:
                     new_csv = response.text.replace("```csv", "").replace("```", "").strip()
                     st.session_state.df_result = pd.read_csv(io.StringIO(new_csv), sep=";", engine="python", on_bad_lines='skip')
                     
-                    bot_reply = "Modification effectuée."
+                    bot_reply = "C'est modifié."
                     st.session_state.chat_history.append({"role": "assistant", "content": bot_reply})
                     st.rerun()
                     
