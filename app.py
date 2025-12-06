@@ -176,5 +176,3 @@ with col_droite:
             
     elif not uploaded_file:
         st.info("Importez un fichier PDF ou Image pour commencer.")
-
-        """)
